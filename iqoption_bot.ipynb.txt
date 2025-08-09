@@ -1,0 +1,133 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "!pip install --quiet yfinance pandas==2.2.2 matplotlib mplfinance\n",
+    "!pip install --quiet git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git\n",
+    "print(\"📦 ติดตั้งเสร็จแล้ว\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import yfinance as yf\n",
+    "import pandas as pd\n",
+    "from iqoptionapi.stable_api import IQ_Option\n",
+    "import time\n",
+    "from datetime import datetime\n",
+    "\n",
+    "# ===== ตั้งค่าบัญชี =====\n",
+    "IQ_EMAIL = \"ใส่อีเมลของคุณ\"\n",
+    "IQ_PASSWORD = \"ใส่พาสเวิร์ดของคุณ\"\n",
+    "STAKE = 300  # เงินลงทุนต่อไม้\n",
+    "\n",
+    "# ===== เชื่อมต่อ IQ Option =====\n",
+    "I_want_money = IQ_Option(IQ_EMAIL, IQ_PASSWORD)\n",
+    "check, reason = I_want_money.connect()\n",
+    "\n",
+    "if check:\n",
+    "    print(\"✅ Login สำเร็จ\")\n",
+    "else:\n",
+    "    print(\"❌ Login ล้มเหลว:\", reason)\n",
+    "    raise SystemExit"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# ===== ฟังก์ชันคำนวณ EMA + RSI =====\n",
+    "def calculate_signals(df):\n",
+    "    df[\"EMA\"] = df[\"Close\"].ewm(span=14, adjust=False).mean()\n",
+    "\n",
+    "    delta = df[\"Close\"].diff()\n",
+    "    gain = delta.where(delta > 0, 0)\n",
+    "    loss = -delta.where(delta < 0, 0)\n",
+    "\n",
+    "    avg_gain = gain.rolling(window=14, min_periods=1).mean()\n",
+    "    avg_loss = loss.rolling(window=14, min_periods=1).mean()\n",
+    "\n",
+    "    rs = avg_gain / avg_loss\n",
+    "    rs = rs.replace([float('inf'), -float('inf')], 0).fillna(0)\n",
+    "\n",
+    "    df[\"RSI\"] = 100 - (100 / (1 + rs))\n",
+    "\n",
+    "    df[\"Signal\"] = (df[\"Close\"] > df[\"EMA\"]) & (df[\"RSI\"] < 30)\n",
+    "\n",
+    "    return df"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# ===== ฟังก์ชันวางออเดอร์ =====\n",
+    "def place_trade_iq(asset, signal):\n",
+    "    direction = \"call\" if signal else \"put\"\n",
+    "    check, id = I_want_money.buy(STAKE, asset, direction, 1)\n",
+    "    if check:\n",
+    "        return f\"ส่งคำสั่ง {direction.upper()} สำเร็จ ID: {id}\"\n",
+    "    else:\n",
+    "        return \"คำสั่งล้มเหลว\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# ===== ตั้งค่าคู่เงิน =====\n",
+    "pairs = [\"EURGBP=X\", \"GBPUSD=X\"]\n",
+    "UPDATE_SEC = 60\n",
+    "last_signal_time = {}\n",
+    "\n",
+    "# ===== Loop หลัก =====\n",
+    "while True:\n",
+    "    for pair in pairs:\n",
+    "        data = yf.download(pair, period=\"1d\", interval=\"1m\")\n",
+    "        if data.empty:\n",
+    "            continue\n",
+    "\n",
+    "        data = calculate_signals(data)\n",
+    "        latest_sig = data[\"Signal\"].iat[-1]\n",
+    "        latest_time = data.index[-1]\n",
+    "\n",
+    "        if latest_sig and last_signal_time.get(pair) != latest_time:\n",
+    "            iq_asset = pair.replace(\"=X\", \"\")\n",
+    "            print(f\"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {pair} สัญญาณ: {latest_sig}\")\n",
+    "            note = place_trade_iq(iq_asset, latest_sig)\n",
+    "            print(note)\n",
+    "            last_signal_time[pair] = latest_time\n",
+    "\n",
+    "        time.sleep(1)\n",
+    "\n",
+    "    time.sleep(UPDATE_SEC)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "name": "python",
+   "version": "3.10"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
